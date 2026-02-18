@@ -1,0 +1,67 @@
+name: deploy-templates
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "templates/**"
+  pull_request:
+    # paths:
+    #   - "templates/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy_template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@5ef0c079ce82195b2a36a210272d6b661572d83e # v2.14.2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Terraform
+        uses: ./.github/actions/setup-tf
+
+      # TODO: Use ls and for-loop to iterate over all templates
+      - name: Terraform init and validate
+        run: |
+          pushd templates/k8s-devcontainers
+          terraform init
+          terraform validate
+          popd
+
+      - name: Get short commit SHA
+        if: github.ref == 'refs/heads/main'
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Get latest commit title
+        if: github.ref == 'refs/heads/main'
+        id: message
+        run: echo "pr_title=$(git log --format=%s -n 1 ${{ github.sha }})" >> "$GITHUB_OUTPUT"
+
+      - name: "Push template"
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cd templates
+          terraform apply -auto-approve
+        env:
+          # Consumed by coderd provider
+          CODER_URL: https://dev.coder.com
+          CODER_SESSION_TOKEN: ${{ secrets.CODER_SESSION_TOKEN }}
+          # Template source & details
+          TF_VAR_CODER_DOGFOOD_ANTHROPIC_API_KEY: ${{ secrets.CODER_DOGFOOD_ANTHROPIC_API_KEY }}
+          TF_VAR_CODER_TEMPLATE_NAME: ${{ secrets.CODER_TEMPLATE_NAME }}
+          TF_VAR_CODER_TEMPLATE_VERSION: ${{ steps.vars.outputs.sha_short }}
+          TF_VAR_CODER_TEMPLATE_DIR: ./coder
+          TF_VAR_CODER_TEMPLATE_MESSAGE: ${{ steps.message.outputs.pr_title }}
+          TF_LOG: info
