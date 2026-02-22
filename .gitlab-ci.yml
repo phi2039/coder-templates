@@ -1,0 +1,60 @@
+# Using GitLab-managed Terraform state
+image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+
+variables:
+  TF_ROOT: ${CI_PROJECT_DIR}/terraform
+  TF_STATE_NAME: production
+  TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${TF_STATE_NAME}
+
+stages:
+  - prepare
+  - validate
+  - plan
+  - apply
+
+init:
+  stage: prepare
+  script:
+    - cd ${TF_ROOT}
+    - gitlab-terraform init
+  artifacts:
+    paths:
+      - ${TF_ROOT}/.terraform
+
+validate:
+  stage: validate
+  script:
+    - cd ${TF_ROOT}
+    - gitlab-terraform validate
+
+plan:
+  stage: plan
+  script:
+    - cd ${TF_ROOT}
+    - gitlab-terraform plan
+    - gitlab-terraform plan-json
+  artifacts:
+    paths:
+      - ${TF_ROOT}/plan.cache
+    reports:
+      terraform: ${TF_ROOT}/plan.json
+
+apply:
+  stage: apply
+  script:
+    # Consumed by coderd provider
+    - export CODER_URL="$CODER_URL"
+    - export CODER_SESSION_TOKEN="$CODER_SESSION_TOKEN"
+    # Template source & details
+    - export TF_VAR_CODER_TEMPLATE_VERSION="$CI_COMMIT_SHORT_SHA"
+    - export TF_VAR_CODER_TEMPLATE_MESSAGE="$CI_COMMIT_MESSAGE"
+    # - export TF_VAR_CODER_DOGFOOD_ANTHROPIC_API_KEY="${{ secrets.CODER_DOGFOOD_ANTHROPIC_API_KEY }}"
+    - export TF_LOG="info  "
+
+    - cd ${TF_ROOT}
+    - gitlab-terraform apply
+  dependencies:
+    - plan
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
